@@ -1,0 +1,72 @@
+def load_dataset(file_path, target_column, feature_columns=None, categorical_columns=None, test_size=0.2, calibration_ratio=0.2, batch_size=32):
+    """
+    Loads a dataset, preprocesses it, and returns DataLoaders for training, testing, and calibration.
+
+    Parameters:
+        file_path (str): Path to the CSV file.
+        target_column (str): Name of the column containing labels.
+        feature_columns (list, optional): List of feature column names. If None, uses all except target_column.
+        categorical_columns (list, optional): List of categorical columns to encode.
+        test_size (float): Proportion of the dataset to use for testing.
+        calibration_ratio (float): Proportion of training data used for calibration.
+        batch_size (int): Batch size for DataLoaders.
+
+    Returns:
+        dict: Dictionary containing DataLoaders and tensors for train, test, and calibration sets.
+    """
+
+    # Load dataset
+    df = pd.read_csv(file_path).dropna()
+
+    # Convert categorical columns if provided
+    if categorical_columns:
+        for col in categorical_columns:
+            df[col] = df[col].astype('category').cat.codes  # Converts categories to integers
+
+    # Select features and target
+    if feature_columns is None:
+        feature_columns = [col for col in df.columns if col != target_column]
+
+    X = df[feature_columns].values
+    y = df[target_column].values
+
+    # Stratified split for train/test
+    #sss = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    #sss = StratifiedShuffleSplit(n_splits=1, test_size=test_size)
+    train_indices, test_indices = next(skf.split(X, y))
+
+    X_train, X_test = X[train_indices], X[test_indices]
+    y_train, y_test = y[train_indices], y[test_indices]
+
+    # Stratified split for train/calibration
+    #sss_calib = StratifiedShuffleSplit(n_splits=1, test_size=calibration_ratio, random_state=42)
+    sss_calib = StratifiedShuffleSplit(n_splits=1, test_size=calibration_ratio)
+    train_indices, calibration_indices = next(sss_calib.split(X_train, y_train))
+
+    # Convert to PyTorch tensors
+    def to_tensor(data, labels):
+        return torch.tensor(data, dtype=torch.float32), torch.tensor(labels, dtype=torch.int64)
+
+    X_train_tensor, y_train_tensor = to_tensor(X_train[train_indices], y_train[train_indices])
+    X_calibration_tensor, y_calibration_tensor = to_tensor(X_train[calibration_indices], y_train[calibration_indices])
+    X_test_tensor, y_test_tensor = to_tensor(X_test, y_test)
+
+    # Create datasets
+    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+    calibration_dataset = TensorDataset(X_calibration_tensor, y_calibration_tensor)
+    test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+
+    # Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    calibration_loader = DataLoader(calibration_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    return {
+        "train_loader": train_loader,
+        "calibration_loader": calibration_loader,
+        "test_loader": test_loader,
+        "train_tensors": (X_train_tensor, y_train_tensor),
+        "calibration_tensors": (X_calibration_tensor, y_calibration_tensor),
+        "test_tensors": (X_test_tensor, y_test_tensor)
+    }
